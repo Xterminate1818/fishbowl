@@ -92,6 +92,32 @@ impl Simulation {
   }
 
   #[inline]
+  pub async fn simulate_image_async(
+    width: f32,
+    height: f32,
+    circle_radius: f32,
+    img: ImageBuffer<Rgb<u8>, Vec<u8>>,
+  ) -> (Self, usize) {
+    let image_hash = ({
+      let mut s = std::hash::DefaultHasher::new();
+      img.hash(&mut s);
+      s.finish()
+    } % 1204) as usize;
+    let mut sim = Simulation::new(width, height, circle_radius, image_hash);
+    while sim.circles() < sim.max_circles {
+      sim.step_async().await;
+    }
+    for _ in 0..120 {
+      sim.step_async().await
+    }
+    let total_iterations = sim.clock;
+    sim.assign_colors_from_image(img);
+    sim.circles.clear();
+    sim.clock = sim.rand_seed;
+    (sim, total_iterations)
+  }
+
+  #[inline]
   pub fn add_circle(&mut self, position: Vector2, velocity: Vector2) {
     self.circles.push(Circle {
       position,
@@ -204,6 +230,24 @@ impl Simulation {
 
   #[inline]
   pub fn step(&mut self) {
+    if self.circles.len() < self.max_circles {
+      self.launch();
+    }
+    if self.circles.len() < self.max_circles {
+      self.launch2();
+    }
+
+    (0..self.substeps).for_each(|_| {
+      self.constrain_rect();
+      self.sort();
+      self.collide();
+      self.integrate();
+      self.clock += 1;
+    });
+  }
+
+  #[inline]
+  pub async fn step_async(&mut self) {
     if self.circles.len() < self.max_circles {
       self.launch();
     }

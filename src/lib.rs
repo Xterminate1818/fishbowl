@@ -43,7 +43,8 @@ pub fn generate(image: ImageBuffer<Rgb<u8>, Vec<u8>>) -> Vec<u8> {
 }
 
 pub async fn generate_async(image: ImageBuffer<Rgb<u8>, Vec<u8>>) -> Vec<u8> {
-  let (mut sim, it) = sim::Simulation::simulate_image(500.0, 500.0, 8.0, image);
+  let (mut sim, it) =
+    sim::Simulation::simulate_image_async(500.0, 500.0, 8.0, image).await;
 
   let mut buffer = Vec::<u8>::new();
   let mut encoder = gif::Encoder::new(&mut buffer, 500, 500, &[]).unwrap();
