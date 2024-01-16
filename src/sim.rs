@@ -1,6 +1,6 @@
 use std::hash::{Hash, Hasher};
 
-use crate::helper::*;
+use crate::{helper::*, make_progress};
 use image::{ImageBuffer, Rgb};
 
 pub struct Circle {
@@ -16,7 +16,7 @@ pub struct Simulation {
   pub colors: Vec<Color>,
   pub max_circles: usize,
   pub clock: usize,
-  substeps: usize,
+  pub substeps: usize,
   rand_seed: usize,
   timescale: f32,
   circle_radius: f32,
@@ -27,6 +27,8 @@ pub struct Simulation {
 }
 
 impl Simulation {
+  pub const POST_PROCESS: usize = 120;
+
   pub fn new(
     width: f32,
     height: f32,
@@ -35,12 +37,12 @@ impl Simulation {
   ) -> Self {
     let area = width * height;
     let circle_area = circle_radius.powi(2) * std::f32::consts::PI;
-    let approx_max = ((area / circle_area).round() * 1.0) as usize;
+    let approx_max = ((area / circle_area).round() * 0.9) as usize;
     Self {
       circles: Vec::with_capacity(approx_max),
       max_circles: approx_max,
       timescale: 1.0 / 60.0,
-      substeps: 4,
+      substeps: 8,
       colors: vec![Color(255, 255, 255); approx_max],
       clock: rand_seed,
       rand_seed,
@@ -48,12 +50,15 @@ impl Simulation {
       radius_variance: circle_radius * 0.1,
       area_size: (width, height),
       gravity: height,
-      response_mod: 0.4,
+      response_mod: 0.9,
     }
   }
 
   #[inline]
-  fn assign_colors_from_image(&mut self, img: ImageBuffer<Rgb<u8>, Vec<u8>>) {
+  async fn assign_colors_from_image(
+    &mut self,
+    img: ImageBuffer<Rgb<u8>, Vec<u8>>,
+  ) {
     let (width, height) = (img.width() as f32 - 1.0, img.height() as f32 - 1.0);
     for (pos, index) in self.circles.iter().map(|c| (c.position, c.index)) {
       let img_x =
@@ -68,53 +73,37 @@ impl Simulation {
   }
 
   #[inline]
-  pub fn simulate_image(
+  pub async fn simulate_image(
     width: f32,
     height: f32,
     circle_radius: f32,
     img: ImageBuffer<Rgb<u8>, Vec<u8>>,
-  ) -> (Self, usize) {
+  ) -> (Self, usize, usize) {
     let image_hash = ({
       let mut s = std::hash::DefaultHasher::new();
       img.hash(&mut s);
       s.finish()
     } % 1204) as usize;
     let mut sim = Simulation::new(width, height, circle_radius, image_hash);
+    let progress = make_progress(
+      "Preprocessing",
+      (sim.max_circles + Self::POST_PROCESS) as u64,
+    );
     while sim.circles() < sim.max_circles {
-      sim.step();
+      sim.step().await;
+      progress.inc(2);
     }
-    (0..120).for_each(|_| sim.step());
+    for _ in 0..Self::POST_PROCESS {
+      sim.step().await;
+      progress.inc(1);
+    }
+    progress.finish();
     let total_iterations = sim.clock;
-    sim.assign_colors_from_image(img);
+    let max_circles = sim.circles.len();
+    sim.assign_colors_from_image(img).await;
     sim.circles.clear();
     sim.clock = sim.rand_seed;
-    (sim, total_iterations)
-  }
-
-  #[inline]
-  pub async fn simulate_image_async(
-    width: f32,
-    height: f32,
-    circle_radius: f32,
-    img: ImageBuffer<Rgb<u8>, Vec<u8>>,
-  ) -> (Self, usize) {
-    let image_hash = ({
-      let mut s = std::hash::DefaultHasher::new();
-      img.hash(&mut s);
-      s.finish()
-    } % 1204) as usize;
-    let mut sim = Simulation::new(width, height, circle_radius, image_hash);
-    while sim.circles() < sim.max_circles {
-      sim.step_async().await;
-    }
-    for _ in 0..120 {
-      sim.step_async().await
-    }
-    let total_iterations = sim.clock;
-    sim.assign_colors_from_image(img);
-    sim.circles.clear();
-    sim.clock = sim.rand_seed;
-    (sim, total_iterations)
+    (sim, total_iterations, max_circles)
   }
 
   #[inline]
@@ -155,7 +144,7 @@ impl Simulation {
 
   // Insertion sort
   #[inline]
-  fn sort(&mut self) {
+  async fn sort(&mut self) {
     if self.circles.len() == 1 {
       return;
     }
@@ -170,7 +159,7 @@ impl Simulation {
   }
 
   #[inline]
-  fn integrate(&mut self) {
+  async fn integrate(&mut self) {
     let delta = self.timescale * (1.0 / self.substeps as f32);
     let gravity = Vector2::new(0.0, self.gravity) * delta.powi(2);
     self.circles.iter_mut().for_each(|circle| {
@@ -181,7 +170,7 @@ impl Simulation {
   }
 
   #[inline]
-  fn collide(&mut self) {
+  async fn collide(&mut self) {
     for i in 0..self.circles.len() {
       // Apply gravity
       for j in i..self.circles.len() {
@@ -229,7 +218,7 @@ impl Simulation {
   }
 
   #[inline]
-  pub fn step(&mut self) {
+  pub async fn step(&mut self) {
     if self.circles.len() < self.max_circles {
       self.launch();
     }
@@ -237,41 +226,21 @@ impl Simulation {
       self.launch2();
     }
 
-    (0..self.substeps).for_each(|_| {
+    for _ in 0..self.substeps {
       self.constrain_rect();
-      self.sort();
-      self.collide();
-      self.integrate();
+      self.sort().await;
+      self.collide().await;
+      self.integrate().await;
       self.clock += 1;
-    });
+    }
   }
 
   #[inline]
-  pub async fn step_async(&mut self) {
-    if self.circles.len() < self.max_circles {
-      self.launch();
+  pub async fn steps(&mut self, steps: usize) {
+    for _ in 0..steps {
+      self.step().await;
     }
-    if self.circles.len() < self.max_circles {
-      self.launch2();
-    }
-
-    (0..self.substeps).for_each(|_| {
-      self.constrain_rect();
-      self.sort();
-      self.collide();
-      self.integrate();
-      self.clock += 1;
-    });
   }
-
-  // #[inline]
-  // pub fn draw(&self, d: &mut RaylibDrawHandle) {
-  //   self
-  //     .circles
-  //     .iter()
-  //     .map(|c| (c.position, c.radius, c.color))
-  //     .for_each(|(pos, radius, color)| d.draw_circle_v(pos,
-  // radius, color)); }
 
   pub fn circles(&self) -> usize {
     self.circles.len()

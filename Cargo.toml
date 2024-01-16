@@ -6,9 +6,26 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+log = "0.4"
 image = "0.24"
 gif = "0.12"
-tiny-skia = "0.11"
+futures = "0.3"
+wgpu = {version="0.18", features=["webgl"]}
+bytemuck = {version="1.14", features=["derive"]}
+futures-intrusive = "0.5"
+pollster = "0.3"
+clap = { version = "4.4.16", features = ["derive"] }
+indicatif = "0.17"
+
+[dev-dependencies]
+flexi_logger = "0.27"
+
+[profile.dev]
+opt-level=1
+# codegen-units = 1
+# lto = "fat"
 
 [profile.release]
+opt-level=3
 codegen-units = 1
+lto = "fat"
